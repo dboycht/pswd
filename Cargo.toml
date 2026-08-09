@@ -1,0 +1,20 @@
+[package]
+name = "pswd"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+aes-gcm = "0.11.0"
+arboard = "3.6.1"
+argon2 = "0.5.3"
+base64 = "0.23.1"
+chrono = "0.4.45"
+console = "0.16.4"
+csv = "1.4.0"
+dialoguer = "0.12.0"
+machine-uid = "0.6.0"
+pinyin = "0.11.0"
+rand = "0.10.2"
+rusqlite = { version = "0.40.1", features = ["bundled"] }
+windows-sys = { version = "0.61.2", features = ["Win32_System_Console", "Win32_Foundation"] }
+zeroize = "1.9.0"
