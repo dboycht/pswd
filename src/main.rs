@@ -62,13 +62,7 @@ fn main_loop(vault: &Vault) -> Result<(), String> {
 
         // 渲染列表（终端环境用缓冲重绘，非终端退化为普通打印）
         if reader.is_some() {
-            render_select_list(
-                &records,
-                sel,
-                &filter,
-                &buf,
-                &mut last_rows,
-            )?;
+            render_select_list(&records, sel, &filter, &mut last_rows)?;
         } else {
             render_plain_list(&records, &filter)?;
         }
@@ -135,13 +129,13 @@ fn main_loop(vault: &Vault) -> Result<(), String> {
     Ok(())
 }
 
-/// 高亮选择式列表渲染：整块清空 → 标题 + 列表（高亮行反色）→ 分隔线 → 提示行，
+/// 高亮选择式列表渲染：整块清空 → 标题 + 列表（高亮行反色）→ 分隔线，
 /// 全部写入缓冲终端，flush 一次性输出，避免逐行刷新闪烁。
+/// 提示行（MAIN_PROMPT）由 read_command 单独维护，不在此渲染（避免双行提示）。
 fn render_select_list(
     records: &[Record],
     sel: usize,
     filter: &Option<String>,
-    buf: &str,
     last_rows: &mut usize,
 ) -> Result<(), String> {
     let term = ui::term();
@@ -162,7 +156,7 @@ fn render_select_list(
     title.push_str("==========");
 
     let item_lines = if records.is_empty() { 1 } else { end - start };
-    let rows = 1 + item_lines + 1 + 1; // 标题 + 记录/提示 + 分隔线 + 指令行
+    let rows = 1 + item_lines + 1; // 标题 + 记录/提示 + 分隔线（提示行在渲染区下一行，由 read_command 维护）
 
     // 上次渲染过则先清掉旧区域再重绘（缓冲序列，flush 时一次性生效）
     if *last_rows > 0 {
@@ -189,7 +183,6 @@ fn render_select_list(
         }
     }
     w("------------------------------------------")?;
-    w(&format!("{MAIN_PROMPT}  {buf}"))?;
     term.flush().map_err(|e| format!("渲染失败：{e}"))?;
     *last_rows = rows;
     Ok(())
