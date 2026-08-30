@@ -1,5 +1,8 @@
 /target
 
+# 打包产物（release zip 不进入仓库）
+/dist
+
 # 密码库数据文件
 pswd.db
 *.db
