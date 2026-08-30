@@ -31,6 +31,8 @@ fn run() -> Result<(), String> {
     } else {
         ui::unlock_flow(db)?
     };
+    // 进入主界面前清屏：吞没解锁/初始化页面的旧输出（主密码输入行、解锁成功等）
+    clear_screen()?;
     main_loop(&vault)
 }
 
