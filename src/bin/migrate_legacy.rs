@@ -26,7 +26,7 @@ fn run() -> Result<(), String> {
     if !Confirm::new()
         .with_prompt("开始迁移？")
         .default(true)
-        .interact()
+        .interact_on(&ui::term())
         .map_err(|_| "已取消".to_string())?
     {
         return Err("已取消迁移".into());
@@ -79,7 +79,7 @@ fn run() -> Result<(), String> {
         && Confirm::new()
             .with_prompt("是否将旧文件备份为 .bak 后保留？")
             .default(true)
-            .interact()
+            .interact_on(&ui::term())
             .map_err(|_| "已取消".to_string())?
     {
         let dt_bak = PathBuf::from(format!("{}.bak", dt_path.to_string_lossy()));
@@ -96,7 +96,7 @@ fn ask_path(prompt: &str, default: &str) -> Result<PathBuf, String> {
     let v: String = Input::new()
         .with_prompt(prompt)
         .default(default.to_string())
-        .interact_text()
+        .interact_text_on(&ui::term())
         .map_err(|_| "已取消".to_string())?;
     Ok(PathBuf::from(v.trim()))
 }

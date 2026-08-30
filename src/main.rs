@@ -190,7 +190,7 @@ fn open_record(vault: &Vault, rec: &Record, position: usize) -> Result<(), Strin
         let choice: String = Input::new()
             .with_prompt(prompt)
             .allow_empty(true)
-            .interact_text()
+            .interact_text_on(&ui::term())
             .map_err(|_| "已退出".to_string())?;
         match choice.trim().to_ascii_lowercase().as_str() {
             "" => break,
@@ -243,7 +243,7 @@ fn add_wizard(vault: &Vault) -> Result<(), String> {
     let app_name = loop {
         let v: String = Input::new()
             .with_prompt("应用名称（必填）")
-            .interact_text()
+            .interact_text_on(&ui::term())
             .map_err(|_| "已取消".to_string())?;
         let v = v.trim().to_string();
         if v.is_empty() {
@@ -279,7 +279,7 @@ fn ask(label: &str) -> String {
     let v: String = Input::new()
         .with_prompt(label)
         .allow_empty(true)
-        .interact_text()
+        .interact_text_on(&ui::term())
         .unwrap_or_default();
     v.trim().to_string()
 }
@@ -329,7 +329,7 @@ fn change_one(vault: &Vault, id: i64, position: usize) -> Result<(), String> {
         let choice: String = Input::new()
             .with_prompt("输入 0-7 或 X/Q")
             .allow_empty(true)
-            .interact_text()
+            .interact_text_on(&ui::term())
             .map_err(|_| "已取消".to_string())?;
         let choice = choice.trim().to_ascii_lowercase();
         match choice.as_str() {
@@ -339,7 +339,7 @@ fn change_one(vault: &Vault, id: i64, position: usize) -> Result<(), String> {
                     if !Confirm::new()
                         .with_prompt("仍要保存吗？")
                         .default(false)
-                        .interact()
+                        .interact_on(&ui::term())
                         .map_err(|_| "已取消".to_string())?
                     {
                         println!("已取消");
@@ -381,7 +381,7 @@ fn change_one(vault: &Vault, id: i64, position: usize) -> Result<(), String> {
                     let v: String = Input::new()
                         .with_prompt(&label)
                         .allow_empty(true)
-                        .interact_text()
+                        .interact_text_on(&ui::term())
                         .map_err(|_| "已取消".to_string())?;
                     fields[i] = v.trim().to_string();
                 }
@@ -411,7 +411,7 @@ fn select_record(records: &[Record], prompt: &str) -> Result<usize, String> {
     Select::new()
         .with_prompt(prompt)
         .items(&items)
-        .interact()
+        .interact_on(&ui::term())
         .map_err(|_| "已取消".to_string())
 }
 
@@ -422,7 +422,7 @@ fn confirm_delete(vault: &Vault, rec: &Record, position: usize) -> Result<bool, 
             rec.app_name
         ))
         .default(false)
-        .interact()
+        .interact_on(&ui::term())
         .map_err(|_| "已取消".to_string())?;
     if confirm {
         vault.delete(rec.id)?;

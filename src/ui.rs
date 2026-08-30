@@ -7,6 +7,16 @@ use dialoguer::{Confirm, Input, Select};
 
 use crate::storage::{self, RecoveryOpts, Vault};
 
+/// 供 dialoguer 使用的缓冲终端。
+///
+/// 普通 `Term::stderr()` 的每次写操作（清行/移动光标/输出行）都会单独刷新控制台，
+/// 而 dialoguer 的选择菜单每次按键都是「整块清空 → 逐行重绘」，多次刷新会让中间
+/// 状态暴露在屏幕上造成**闪烁**。缓冲终端把所有序列先写入内存，`flush()` 时一次性
+/// 输出，屏幕只见最终帧，从根本上消除闪烁。
+pub fn term() -> console::Term {
+    console::Term::buffered_stderr()
+}
+
 /// 启动时调用：把 Windows 控制台代码页设为 UTF-8 并启用 VT 转义序列，避免中文乱码。
 pub fn setup_console() {
     #[cfg(windows)]
@@ -191,7 +201,7 @@ pub fn setup_wizard(db_path: &str) -> Result<String, String> {
     if !Confirm::new()
         .with_prompt("是否开始设置？")
         .default(true)
-        .interact()
+        .interact_on(&term())
         .map_err(|_| "已取消".to_string())?
     {
         return Err("已取消设置".into());
@@ -221,7 +231,7 @@ pub fn setup_wizard(db_path: &str) -> Result<String, String> {
     if Confirm::new()
         .with_prompt("绑定本机机器码作为恢复路径？（注意：任何能接触本机的人可凭此解锁）")
         .default(false)
-        .interact()
+        .interact_on(&term())
         .map_err(|_| "已取消".to_string())?
     {
         recovery.machine_binding = true;
@@ -234,7 +244,7 @@ pub fn setup_wizard(db_path: &str) -> Result<String, String> {
             .with_prompt("添加密保问题（忘记主密码时回答正确即可恢复）")
             .items(items)
             .default(0)
-            .interact()
+            .interact_on(&term())
             .map_err(|_| "已取消".to_string())?;
         match choice {
             0 => qa_add(&mut recovery, "你的身份证号是什么？".into())?,
@@ -242,7 +252,7 @@ pub fn setup_wizard(db_path: &str) -> Result<String, String> {
             2 => {
                 let q: String = Input::new()
                     .with_prompt("请输入自定义问题（例如：你的生日是？）")
-                    .interact_text()
+                    .interact_text_on(&term())
                     .map_err(|_| "已取消".to_string())?;
                 let q = q.trim().to_string();
                 if q.is_empty() {
@@ -314,7 +324,7 @@ fn recovery_menu(db_path: &str) -> Result<Vault, String> {
         .with_prompt("请选择恢复方式")
         .items(&items)
         .default(0)
-        .interact()
+        .interact_on(&term())
         .map_err(|_| "已取消".to_string())?;
     if choice == items.len() - 1 {
         return Err("已退出。".into());
@@ -334,7 +344,7 @@ fn recovery_menu(db_path: &str) -> Result<Vault, String> {
     if Confirm::new()
         .with_prompt("是否立即重设主密码？")
         .default(true)
-        .interact()
+        .interact_on(&term())
         .map_err(|_| "已取消".to_string())?
     {
         let p1 = secret_prompt("新主密码：")?;
