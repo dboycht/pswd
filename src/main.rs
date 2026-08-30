@@ -309,6 +309,7 @@ fn read_line_fallback() -> Result<String, String> {
 fn open_record(vault: &Vault, rec: &Record, position: usize) -> Result<(), String> {
     let mut reveal = false;
     loop {
+        clear_screen()?; // 切页：每次重绘都吞没旧输出（V/C/M/D 后重画）
         println!("\n========== 记录 #{position}（{}）==========", rec.app_name);
         print_record(rec, vault, reveal);
         println!("--------------------------------");
@@ -451,6 +452,7 @@ fn change_one(vault: &Vault, id: i64, position: usize) -> Result<(), String> {
     ];
 
     loop {
+        clear_screen()?; // 切页：每次重绘字段列表都吞没旧输出
         println!("\n--- 修改记录 #{position}（选择字段编号，可连续修改）---");
         for (i, name) in FIELD_NAMES.iter().enumerate() {
             println!("[{i}] {name}：{}", fields[i]);
