@@ -35,55 +35,47 @@ fn run() -> Result<(), String> {
 }
 
 /// 主界面指令行的提示文字
-const MAIN_PROMPT: &str = "搜索词 / [数字]打开 / [A]新增 / [C]修改 / [D]删除 / [↑↓]翻页 / [回车]全部 / [Q]退出";
+const MAIN_PROMPT: &str = "↑↓选择 / [回车]打开 / 输入搜索词 / [A]新增 / [C]修改 / [D]删除 / [Q]退出";
 
+/// 主循环：高亮选择式列表（↑/↓ 移动高亮、回车打开、输入过滤、A/C/D/Q 命令）
 fn main_loop(vault: &Vault) -> Result<(), String> {
     // 终端按键读取器（非终端环境为 None，退化为普通读行）
     let reader = ui::KeyReader::new().ok();
     let mut filter: Option<String> = None;
-    let mut page: usize = 0;
+    // 当前高亮记录的全局索引（跨页连续，0 起）
+    let mut sel: usize = 0;
+    // 搜索/命令输入缓冲
+    let mut buf = String::new();
+    // 上次渲染占用行数（0 = 尚未渲染或需要重新定位，直接往下画）
+    let mut last_rows: usize = 0;
     loop {
         let records = match &filter {
             None => vault.list()?,
             Some(kw) => vault.search(kw)?,
         };
-        let pages = records.len().div_ceil(PAGE_SIZE).max(1);
-        if page >= pages {
-            page = pages - 1;
-        }
-        let start = page * PAGE_SIZE;
-        let end = (start + PAGE_SIZE).min(records.len());
-
-        // 标题（含总数/搜索词/页码）
-        let mut title = format!("========== 密码库（共 {} 条", records.len());
-        if let Some(kw) = &filter {
-            title.push_str(&format!("，搜索「{kw}」"));
-        }
-        title.push('）');
-        if pages > 1 {
-            title.push_str(&format!("  第 {}/{} 页", page + 1, pages));
-        }
-        println!("\n{title}==========");
-
+        // 约束高亮索引在合法范围
         if records.is_empty() {
-            match &filter {
-                Some(kw) => println!("（没有匹配「{kw}」的记录）"),
-                None => println!("（还没有任何记录，输入 A 新增）"),
-            }
-        } else {
-            // 序号为当前列表中的连续编号（跨页连续，1 开始）
-            for (i, r) in records[start..end].iter().enumerate() {
-                println!("[{:>3}] {}", start + i + 1, r.app_name);
-            }
-            if pages > 1 {
-                println!("…（共 {} 条，按 ↑/↓ 或 PgUp/PgDn 翻页）", records.len());
-            }
+            sel = 0;
+        } else if sel >= records.len() {
+            sel = records.len() - 1;
         }
-        println!("------------------------------------------");
 
-        // 指令输入：↑/↓/PgUp/PgDn 直接翻页（返回 None 表示重新渲染列表）
+        // 渲染列表（终端环境用缓冲重绘，非终端退化为普通打印）
+        if reader.is_some() {
+            render_select_list(
+                &records,
+                sel,
+                &filter,
+                &buf,
+                &mut last_rows,
+            )?;
+        } else {
+            render_plain_list(&records, &filter)?;
+        }
+
+        // 指令输入：↑/↓ 移动高亮（返回 None 表示重新渲染列表）
         let input = match &reader {
-            Some(r) => match read_command(r, page, pages, &mut page)? {
+            Some(r) => match read_command(r, records.len(), &mut sel, &mut buf)? {
                 Some(s) => s,
                 None => continue,
             },
@@ -91,33 +83,50 @@ fn main_loop(vault: &Vault) -> Result<(), String> {
         };
 
         if input.is_empty() {
-            filter = None;
-            page = 0;
+            // 回车（无输入）→ 打开当前高亮记录
+            if records.is_empty() {
+                println!("（没有记录可打开）");
+            } else {
+                open_record(vault, &records[sel], sel + 1)?;
+            }
+            last_rows = 0;
+            buf.clear();
             continue;
         }
         match input.to_ascii_lowercase().as_str() {
             "a" | "w" => {
                 add_wizard(vault)?;
                 filter = None;
-                page = 0;
+                sel = 0;
+                last_rows = 0;
             }
-            "c" => change_wizard(vault)?,
+            "c" => {
+                change_wizard(vault)?;
+                last_rows = 0;
+            }
             "d" => {
                 delete_wizard(vault)?;
                 filter = None;
-                page = 0;
+                last_rows = 0;
             }
             "q" | "exit" | "quit" => break,
             _ => {
                 if let Ok(n) = input.parse::<usize>() {
+                    // 数字：直接打开对应编号记录（并同步高亮）
                     if n >= 1 && n <= records.len() {
+                        sel = n - 1;
                         open_record(vault, &records[n - 1], n)?;
+                        last_rows = 0;
+                        buf.clear();
                     } else {
                         println!("编号超出范围（当前列表 1-{}）", records.len());
+                        last_rows = 0;
                     }
                 } else {
+                    // 其余输入视为搜索词
                     filter = Some(input);
-                    page = 0;
+                    sel = 0;
+                    buf.clear();
                 }
             }
         }
@@ -126,18 +135,114 @@ fn main_loop(vault: &Vault) -> Result<(), String> {
     Ok(())
 }
 
-/// 主界面指令读取：直接按键翻页（无需回车），其余输入回车提交。
-/// 返回 None 表示已翻页（调用方需重新渲染列表）。
+/// 高亮选择式列表渲染：整块清空 → 标题 + 列表（高亮行反色）→ 分隔线 → 提示行，
+/// 全部写入缓冲终端，flush 一次性输出，避免逐行刷新闪烁。
+fn render_select_list(
+    records: &[Record],
+    sel: usize,
+    filter: &Option<String>,
+    buf: &str,
+    last_rows: &mut usize,
+) -> Result<(), String> {
+    let term = ui::term();
+    let pages = records.len().div_ceil(PAGE_SIZE).max(1);
+    let page = if records.is_empty() { 0 } else { sel / PAGE_SIZE };
+    let start = page * PAGE_SIZE;
+    let end = (start + PAGE_SIZE).min(records.len());
+
+    // 标题（含总数/搜索词/页码）
+    let mut title = format!("========== 密码库（共 {} 条", records.len());
+    if let Some(kw) = filter {
+        title.push_str(&format!("，搜索「{kw}」"));
+    }
+    title.push('）');
+    if pages > 1 {
+        title.push_str(&format!("  第 {}/{} 页", page + 1, pages));
+    }
+    title.push_str("==========");
+
+    let item_lines = if records.is_empty() { 1 } else { end - start };
+    let rows = 1 + item_lines + 1 + 1; // 标题 + 记录/提示 + 分隔线 + 指令行
+
+    // 上次渲染过则先清掉旧区域再重绘（缓冲序列，flush 时一次性生效）
+    if *last_rows > 0 {
+        term.clear_last_lines(*last_rows)
+            .map_err(|e| format!("重绘失败：{e}"))?;
+    }
+    let w = |s: &str| term.write_line(s).map_err(|e| format!("渲染失败：{e}"));
+    w(&title)?;
+    if records.is_empty() {
+        match filter {
+            Some(kw) => w(&format!("（没有匹配「{kw}」的记录）"))?,
+            None => w("（还没有任何记录，按 A 新增）")?,
+        };
+    } else {
+        for (i, r) in records[start..end].iter().enumerate() {
+            let idx = start + i;
+            let line = format!("[{:>3}] {}", idx + 1, r.app_name);
+            // 高亮行：反色 + ❯ 前缀
+            if idx == sel {
+                w(&format!("\x1b[7m❯ {line}\x1b[0m"))?;
+            } else {
+                w(&format!("  {line}"))?;
+            }
+        }
+    }
+    w("------------------------------------------")?;
+    w(&format!("{MAIN_PROMPT}  {buf}"))?;
+    term.flush().map_err(|e| format!("渲染失败：{e}"))?;
+    *last_rows = rows;
+    Ok(())
+}
+
+/// 非终端环境：普通读行（无直接翻页/高亮，其余行为一致）
+fn render_plain_list(
+    records: &[Record],
+    filter: &Option<String>,
+) -> Result<(), String> {
+    let pages = records.len().div_ceil(PAGE_SIZE).max(1);
+    let page = 0;
+    let start = page * PAGE_SIZE;
+    let end = (start + PAGE_SIZE).min(records.len());
+
+    let mut title = format!("========== 密码库（共 {} 条", records.len());
+    if let Some(kw) = filter {
+        title.push_str(&format!("，搜索「{kw}」"));
+    }
+    title.push('）');
+    if pages > 1 {
+        title.push_str(&format!("  第 {}/{} 页", page + 1, pages));
+    }
+    println!("\n{title}==========");
+
+    if records.is_empty() {
+        match filter {
+            Some(kw) => println!("（没有匹配「{kw}」的记录）"),
+            None => println!("（还没有任何记录，输入 A 新增）"),
+        }
+    } else {
+        for (i, r) in records[start..end].iter().enumerate() {
+            println!("[{:>3}] {}", start + i + 1, r.app_name);
+        }
+        if pages > 1 {
+            println!("…（共 {} 条，输入编号打开）", records.len());
+        }
+    }
+    println!("------------------------------------------");
+    Ok(())
+}
+
+/// 高亮选择模式指令读取：↑/↓ 移动高亮（返回 None 触发重绘），回车提交输入。
+/// 返回 None 表示已移动高亮（调用方需重新渲染列表）。
 fn read_command(
     reader: &ui::KeyReader,
-    page: usize,
-    pages: usize,
-    page_ref: &mut usize,
+    records_len: usize,
+    sel: &mut usize,
+    buf: &mut String,
 ) -> Result<Option<String>, String> {
     use ui::KeyPress;
-    let mut buf = String::new();
+    let mut out = std::io::stderr();
     loop {
-        let mut out = std::io::stderr();
         let _ = write!(out, "\r\x1b[2K{MAIN_PROMPT}  {buf}");
         let _ = out.flush();
         match reader.read()? {
@@ -145,16 +250,27 @@ fn read_command(
             KeyPress::Backspace => {
                 buf.pop();
             }
-            // 直接翻页：无需回车
-            KeyPress::Up | KeyPress::PageUp => {
-                if page > 0 {
-                    *page_ref = page - 1;
+            // 移动高亮：上下逐条移动，跨页边界自动换页
+            KeyPress::Up => {
+                if *sel > 0 {
+                    *sel -= 1;
                 }
                 return Ok(None);
             }
-            KeyPress::Down | KeyPress::PageDown => {
-                if page + 1 < pages {
-                    *page_ref = page + 1;
+            KeyPress::Down => {
+                if *sel + 1 < records_len {
+                    *sel += 1;
+                }
+                return Ok(None);
+            }
+            // 整页跳转
+            KeyPress::PageUp => {
+                *sel = sel.saturating_sub(PAGE_SIZE);
+                return Ok(None);
+            }
+            KeyPress::PageDown => {
+                if records_len > 0 {
+                    *sel = (*sel + PAGE_SIZE).min(records_len - 1);
                 }
                 return Ok(None);
             }
