@@ -18,23 +18,68 @@ pub fn term() -> console::Term {
 }
 
 /// 启动时调用：把 Windows 控制台代码页设为 UTF-8 并启用 VT 转义序列，避免中文乱码。
+/// stdout 与 stderr 都启用 VT（stdout 的 println 输出 ANSI 颜色需要它）。
 pub fn setup_console() {
     #[cfg(windows)]
     unsafe {
         use windows_sys::Win32::System::Console::{
             GetConsoleMode, GetStdHandle, SetConsoleCP, SetConsoleMode, SetConsoleOutputCP,
-            ENABLE_VIRTUAL_TERMINAL_PROCESSING, STD_ERROR_HANDLE,
+            ENABLE_VIRTUAL_TERMINAL_PROCESSING, STD_ERROR_HANDLE, STD_OUTPUT_HANDLE,
         };
         const CP_UTF8: u32 = 65001;
         // 输出/输入代码页：让所有按字节写出的内容按 UTF-8 解读
         let _ = SetConsoleOutputCP(CP_UTF8);
         let _ = SetConsoleCP(CP_UTF8);
-        // 启用 VT 转义序列（密码输入行的整行重绘需要）
-        let handle = GetStdHandle(STD_ERROR_HANDLE);
-        let mut mode: u32 = 0;
-        if GetConsoleMode(handle, &mut mode) != 0 {
-            let _ = SetConsoleMode(handle, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+        // 启用 VT 转义序列（密码输入行的整行重绘需要；stdout 也需要以便 println 颜色生效）
+        for handle in [GetStdHandle(STD_ERROR_HANDLE), GetStdHandle(STD_OUTPUT_HANDLE)] {
+            let mut mode: u32 = 0;
+            if GetConsoleMode(handle, &mut mode) != 0 {
+                let _ = SetConsoleMode(handle, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+            }
         }
+    }
+}
+
+/// Claude Code 风格主题：终端下自动着色，管道/重定向下自动无色。
+/// 统一用 for_stderr 判定（UI 主输出在 stderr；stdout 也已启用 VT）。
+pub mod theme {
+    use console::style;
+
+    fn st(s: &str) -> console::StyledObject<&str> {
+        style(s).for_stderr()
+    }
+
+    /// 标题（亮洋红加粗）
+    pub fn title(s: &str) -> String {
+        format!("{}", st(s).magenta().bright().bold())
+    }
+    /// 字段名（青色）
+    pub fn field(s: &str) -> String {
+        format!("{}", st(s).cyan())
+    }
+    /// 成功反馈（绿色）
+    pub fn ok(s: &str) -> String {
+        format!("{}", st(s).green())
+    }
+    /// 警告（黄色）
+    pub fn warn(s: &str) -> String {
+        format!("{}", st(s).yellow())
+    }
+    /// 错误（红色）
+    pub fn err(s: &str) -> String {
+        format!("{}", st(s).red())
+    }
+    /// 次要信息（暗色）
+    pub fn dim(s: &str) -> String {
+        format!("{}", st(s).dim())
+    }
+    /// 高亮行（反色加粗）
+    pub fn highlight(s: &str) -> String {
+        format!("{}", st(s).reverse().bold())
+    }
+    /// 分隔线
+    pub fn divider() -> String {
+        format!("{}", st(&"─".repeat(46)).dim())
     }
 }
 
@@ -195,9 +240,10 @@ fn read_line_fallback() -> Result<String, String> {
 /// 首次使用向导：设置主密码 + 可选恢复路径，然后建库。
 /// 返回主密码（供调用方直接解锁，避免重复输入）。
 pub fn setup_wizard(db_path: &str) -> Result<String, String> {
-    println!("首次使用，将创建密码库 {db_path}");
-    println!("- 主密码用于加密全部数据，不会保存为明文");
-    println!("- 忘记主密码时，可用设置的恢复路径（机器码 / 密保问卷）找回");
+    println!("\n{}", theme::title("── 首次使用 · 创建密码库 ──"));
+    println!("{}", theme::dim(&format!("数据库：{db_path}")));
+    println!("{}", theme::dim("- 主密码用于加密全部数据，不会保存为明文"));
+    println!("{}", theme::dim("- 忘记主密码时，可用设置的恢复路径（机器码 / 密保问卷）找回"));
     if !Confirm::new()
         .with_prompt("是否开始设置？")
         .default(true)
@@ -211,12 +257,12 @@ pub fn setup_wizard(db_path: &str) -> Result<String, String> {
     let master = loop {
         let p1 = secret_prompt("设置主密码：")?;
         if p1.is_empty() {
-            println!("主密码不能为空，请重新设置");
+            println!("{}", theme::warn("⚠ 主密码不能为空，请重新设置"));
             continue;
         }
         let p2 = secret_prompt("请再次输入主密码：")?;
         if p1 != p2 {
-            println!("两次输入不一致，请重新设置");
+            println!("{}", theme::warn("⚠ 两次输入不一致，请重新设置"));
             continue;
         }
         break p1;
@@ -227,7 +273,8 @@ pub fn setup_wizard(db_path: &str) -> Result<String, String> {
         machine_binding: false,
         qa_pairs: vec![],
     };
-    println!("\n--- 恢复路径设置（可选，至少建议设置一个）---");
+    println!("\n{}", theme::title("── 恢复路径设置 ──"));
+    println!("{}", theme::dim("（可选，至少建议设置一个）"));
     if Confirm::new()
         .with_prompt("绑定本机机器码作为恢复路径？（注意：任何能接触本机的人可凭此解锁）")
         .default(false)
@@ -235,7 +282,7 @@ pub fn setup_wizard(db_path: &str) -> Result<String, String> {
         .map_err(|_| "已取消".to_string())?
     {
         recovery.machine_binding = true;
-        println!("已绑定机器码恢复路径");
+        println!("{}", theme::ok("✓ 已绑定机器码恢复路径"));
     }
 
     loop {
@@ -256,7 +303,7 @@ pub fn setup_wizard(db_path: &str) -> Result<String, String> {
                     .map_err(|_| "已取消".to_string())?;
                 let q = q.trim().to_string();
                 if q.is_empty() {
-                    println!("问题不能为空");
+                    println!("{}", theme::warn("⚠ 问题不能为空"));
                     continue;
                 }
                 qa_add(&mut recovery, q)?;
@@ -266,7 +313,10 @@ pub fn setup_wizard(db_path: &str) -> Result<String, String> {
     }
 
     storage::init(db_path, &master, &recovery)?;
-    println!("\n密码库创建完成！请牢记主密码与恢复答案。");
+    println!(
+        "\n{}",
+        theme::ok("✓ 密码库创建完成！请牢记主密码与恢复答案。")
+    );
     Ok(master)
 }
 
@@ -274,18 +324,18 @@ fn qa_add(recovery: &mut RecoveryOpts, question: String) -> Result<(), String> {
     let answer = loop {
         let a1 = secret_prompt(&format!("回答问题「{question}」："))?;
         if a1.is_empty() {
-            println!("答案不能为空");
+            println!("{}", theme::warn("⚠ 答案不能为空"));
             continue;
         }
         let a2 = secret_prompt("请再次输入答案：")?;
         if a1 != a2 {
-            println!("两次输入不一致，请重试");
+            println!("{}", theme::warn("⚠ 两次输入不一致，请重试"));
             continue;
         }
         break a1;
     };
     recovery.qa_pairs.push((question, answer));
-    println!("已添加密保问题");
+    println!("{}", theme::ok("✓ 已添加密保问题"));
     Ok(())
 }
 
@@ -294,11 +344,11 @@ pub fn unlock_flow(db_path: &str) -> Result<Vault, String> {
     let pw = secret_prompt("主密码：")?;
     match storage::open(db_path, &pw) {
         Ok(vault) => {
-            println!("解锁成功");
+            println!("{}", theme::ok("✓ 解锁成功"));
             Ok(vault)
         }
         Err(storage::UnlockError::WrongCredential) => {
-            println!("主密码错误。");
+            println!("{}", theme::err("✗ 主密码错误。"));
             recovery_menu(db_path)
         }
         Err(e) => Err(e.to_string()),
@@ -338,7 +388,7 @@ fn recovery_menu(db_path: &str) -> Result<Vault, String> {
         let answer = secret_prompt(&format!("回答「{}」：", questions[qi]))?;
         storage::recover_with_qa(db_path, qi, &answer).map_err(|e| e.to_string())?
     };
-    println!("恢复成功！");
+    println!("{}", theme::ok("✓ 恢复成功！"));
 
     // 恢复后建议立即重设主密码
     if Confirm::new()
@@ -351,9 +401,9 @@ fn recovery_menu(db_path: &str) -> Result<Vault, String> {
         let p2 = secret_prompt("请再次输入新主密码：")?;
         if !p1.is_empty() && p1 == p2 {
             vault.reset_master(&p1)?;
-            println!("主密码已更新");
+            println!("{}", theme::ok("✓ 主密码已更新"));
         } else {
-            println!("输入无效或两次不一致，主密码未修改");
+            println!("{}", theme::warn("⚠ 输入无效或两次不一致，主密码未修改"));
         }
     }
     Ok(vault)

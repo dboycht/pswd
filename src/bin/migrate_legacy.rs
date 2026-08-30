@@ -20,9 +20,9 @@ fn main() {
 }
 
 fn run() -> Result<(), String> {
-    println!("=== 旧数据迁移工具 ===");
-    println!("把 pswd2.py 旧格式数据（dt_data.csv + ps_data.txt）导入新的密码库（pswd.db）");
-    println!("步骤：① 读取旧文件 ② 解码旧加密 ③ 用新方案重新加密 ④ 写入密码库 ⑤ 备份旧文件\n");
+    println!("\n{}", pswd::ui::theme::title("── 旧数据迁移工具 ──"));
+    println!("{}", pswd::ui::theme::dim("把 pswd2.py 旧格式数据（dt_data.csv + ps_data.txt）导入新的密码库（pswd.db）"));
+    println!("{}", pswd::ui::theme::dim("步骤：① 读取旧文件 ② 解码旧加密 ③ 用新方案重新加密 ④ 写入密码库 ⑤ 备份旧文件\n"));
     if !Confirm::new()
         .with_prompt("开始迁移？")
         .default(true)
@@ -43,12 +43,19 @@ fn run() -> Result<(), String> {
     }
 
     // ② 读取旧数据
-    println!("\n正在读取旧文件…");
+    println!("\n{}", pswd::ui::theme::dim("正在读取旧文件…"));
     let rows = migrate::read_legacy_dt(&dt_path)?;
     let ps_lines = migrate::read_legacy_ps(&ps_path)?;
-    println!("CSV 记录 {} 条，密码文件 {} 行", rows.len(), ps_lines.len());
+    println!(
+        "{}",
+        pswd::ui::theme::dim(&format!(
+            "CSV 记录 {} 条，密码文件 {} 行",
+            rows.len(),
+            ps_lines.len()
+        ))
+    );
     if rows.len() != ps_lines.len() {
-        println!("⚠ 警告：CSV 与密码文件行数不一致，将按较短者对齐，缺失项记为失败");
+        println!("{}", pswd::ui::theme::warn("⚠ 警告：CSV 与密码文件行数不一致，将按较短者对齐，缺失项记为失败"));
     }
 
     // ③ 打开/创建密码库
@@ -62,18 +69,22 @@ fn run() -> Result<(), String> {
     };
 
     // ④ 逐条迁移
-    println!("\n正在迁移…");
+    println!("\n{}", pswd::ui::theme::dim("正在迁移…"));
     let result = migrate::import_legacy(&vault, &rows, &ps_lines);
 
     // ⑤ 汇总与备份
-    println!("\n=== 迁移结果 ===");
-    println!("成功导入：{} 条", result.ok);
-    println!("失败：{} 条", result.failures.len());
-    for (i, why) in &result.failures {
-        println!("  第 {} 行：{why}", i + 1);
+    println!("\n{}", pswd::ui::theme::title("── 迁移结果 ──"));
+    println!("{}", pswd::ui::theme::ok(&format!("✓ 成功导入：{} 条", result.ok)));
+    if result.failures.is_empty() {
+        println!("{}", pswd::ui::theme::dim("无失败项"));
+    } else {
+        println!("{}", pswd::ui::theme::err(&format!("✗ 失败：{} 条", result.failures.len())));
+        for (i, why) in &result.failures {
+            println!("  第 {} 行：{why}", i + 1);
+        }
     }
     if result.ok > 0 && !result.failures.is_empty() {
-        println!("提示：可修复失败项后再次运行本工具（已导入的记录会重复导入，请注意清理）");
+        println!("{}", pswd::ui::theme::warn("提示：可修复失败项后再次运行本工具（已导入的记录会重复导入，请注意清理）"));
     }
     if result.ok > 0
         && Confirm::new()
@@ -86,9 +97,9 @@ fn run() -> Result<(), String> {
         let ps_bak = PathBuf::from(format!("{}.bak", ps_path.to_string_lossy()));
         fs::rename(&dt_path, &dt_bak).map_err(|e| format!("备份 {} 失败：{e}", dt_path.display()))?;
         fs::rename(&ps_path, &ps_bak).map_err(|e| format!("备份 {} 失败：{e}", ps_path.display()))?;
-        println!("旧文件已备份为：\n  {}\n  {}", dt_bak.display(), ps_bak.display());
+        println!("{}", pswd::ui::theme::dim(&format!("旧文件已备份为：\n  {}\n  {}", dt_bak.display(), ps_bak.display())));
     }
-    println!("\n迁移完成！现在可用主程序 pswd 查看新库数据。");
+    println!("\n{}", pswd::ui::theme::ok("✓ 迁移完成！现在可用主程序 pswd 查看新库数据。"));
     Ok(())
 }
 

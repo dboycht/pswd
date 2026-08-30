@@ -80,7 +80,7 @@ fn main_loop(vault: &Vault) -> Result<(), String> {
         if input.is_empty() {
             // 回车（无输入）→ 打开当前高亮记录
             if records.is_empty() {
-                println!("（没有记录可打开）");
+                println!("{}", ui::theme::dim("（没有记录可打开）"));
             } else {
                 clear_screen()?; // 切页：清掉旧列表
                 open_record(vault, &records[sel], sel + 1)?;
@@ -124,7 +124,7 @@ fn main_loop(vault: &Vault) -> Result<(), String> {
                         last_rows = 0;
                         buf.clear();
                     } else {
-                        println!("编号超出范围（当前列表 1-{}）", records.len());
+                        println!("{}", ui::theme::warn(&format!("⚠ 编号超出范围（当前列表 1-{}）", records.len())));
                         last_rows = 0;
                     }
                 } else {
@@ -136,7 +136,7 @@ fn main_loop(vault: &Vault) -> Result<(), String> {
             }
         }
     }
-    println!("再见！");
+    println!("{}", ui::theme::dim("再见！"));
     Ok(())
 }
 
@@ -165,16 +165,17 @@ fn render_select_list(
     let start = page * PAGE_SIZE;
     let end = (start + PAGE_SIZE).min(records.len());
 
-    // 标题（含总数/搜索词/页码）
-    let mut title = format!("========== 密码库（共 {} 条", records.len());
+    // 标题（含总数/搜索词/页码）——Claude 风格：亮洋红标题 + 暗色页码
+    let mut title = format!(" 密码库（共 {} 条", records.len());
     if let Some(kw) = filter {
         title.push_str(&format!("，搜索「{kw}」"));
     }
     title.push('）');
+    let mut page_note = String::new();
     if pages > 1 {
-        title.push_str(&format!("  第 {}/{} 页", page + 1, pages));
+        page_note = ui::theme::dim(&format!("  第 {}/{} 页", page + 1, pages));
     }
-    title.push_str("==========");
+    let title = format!("──{}──{}", ui::theme::title(&title), page_note);
 
     let item_lines = if records.is_empty() { 1 } else { end - start };
     let rows = 1 + item_lines + 1; // 标题 + 记录/提示 + 分隔线（提示行在渲染区下一行，由 read_command 维护）
@@ -188,22 +189,22 @@ fn render_select_list(
     w(&title)?;
     if records.is_empty() {
         match filter {
-            Some(kw) => w(&format!("（没有匹配「{kw}」的记录）"))?,
-            None => w("（还没有任何记录，按 A 新增）")?,
+            Some(kw) => w(&ui::theme::dim(&format!("（没有匹配「{kw}」的记录）")))?,
+            None => w(&ui::theme::dim("（还没有任何记录，按 A 新增）"))?,
         };
     } else {
         for (i, r) in records[start..end].iter().enumerate() {
             let idx = start + i;
             let line = format!("[{:>3}] {}", idx + 1, r.app_name);
-            // 高亮行：反色 + ❯ 前缀
+            // 高亮行：反色加粗 + ❯ 前缀（Claude 风格）
             if idx == sel {
-                w(&format!("\x1b[7m❯ {line}\x1b[0m"))?;
+                w(&ui::theme::highlight(&format!("❯ {line}")))?;
             } else {
                 w(&format!("  {line}"))?;
             }
         }
     }
-    w("------------------------------------------")?;
+    w(&ui::theme::divider())?;
     term.flush().map_err(|e| format!("渲染失败：{e}"))?;
     *last_rows = rows;
     Ok(())
@@ -256,8 +257,14 @@ fn read_command(
 ) -> Result<Option<String>, String> {
     use ui::KeyPress;
     let mut out = std::io::stderr();
+    // Claude 风格输入行：❯ 前缀 + 主提示（暗色）+ 已输入内容
+    let prompt_line = format!(
+        "{} {}",
+        ui::theme::title("❯"),
+        ui::theme::dim(MAIN_PROMPT)
+    );
     loop {
-        let _ = write!(out, "\r\x1b[2K{MAIN_PROMPT}  {buf}");
+        let _ = write!(out, "\r\x1b[2K{prompt_line} {buf}");
         let _ = out.flush();
         match reader.read()? {
             KeyPress::Char(c) => buf.push(c),
@@ -310,9 +317,12 @@ fn open_record(vault: &Vault, rec: &Record, position: usize) -> Result<(), Strin
     let mut reveal = false;
     loop {
         clear_screen()?; // 切页：每次重绘都吞没旧输出（V/C/M/D 后重画）
-        println!("\n========== 记录 #{position}（{}）==========", rec.app_name);
+        println!(
+            "\n──{}──",
+            ui::theme::title(&format!(" 记录 #{position}（{}） ", rec.app_name))
+        );
         print_record(rec, vault, reveal);
-        println!("--------------------------------");
+        println!("{}", ui::theme::divider());
         let prompt = if reveal {
             "[V]隐藏密码 / [C]复制 / [M]修改 / [D]删除 / [回车]返回"
         } else {
@@ -333,7 +343,7 @@ fn open_record(vault: &Vault, rec: &Record, position: usize) -> Result<(), Strin
                     return Ok(());
                 }
             }
-            _ => println!("无法识别的命令"),
+            _ => println!("{}", ui::theme::err("✗ 无法识别的命令")),
         }
     }
     Ok(())
@@ -349,28 +359,30 @@ fn print_record(rec: &Record, vault: &Vault, reveal: bool) {
     } else {
         format!("{}（V 暂时查看）", "•".repeat(pwd.chars().count()))
     };
-    println!("应用名称：{}", rec.app_name);
-    println!("昵称：{}", rec.nick_name);
-    println!("用户名：{}", rec.user_name);
-    println!("ID：{}", rec.user_id);
-    println!("密码：{pwd_line}");
-    println!("凭证应用：{}", rec.voucher);
-    println!("注册凭证：{}", rec.register);
-    println!("备注：{}", rec.remark);
-    println!("最后修改：{}", rec.stamp);
+    let f = |name: &str| ui::theme::field(name);
+    println!("{}：{}", f("应用名称"), rec.app_name);
+    println!("{}：{}", f("昵称"), rec.nick_name);
+    println!("{}：{}", f("用户名"), rec.user_name);
+    println!("{}：{}", f("ID"), rec.user_id);
+    println!("{}：{}", f("密码"), pwd_line);
+    println!("{}：{}", f("凭证应用"), rec.voucher);
+    println!("{}：{}", f("注册凭证"), rec.register);
+    println!("{}：{}", f("备注"), rec.remark);
+    println!("{}：{}", f("最后修改"), rec.stamp);
 }
 
 fn copy_password(vault: &Vault, rec: &Record) -> Result<(), String> {
     let pwd = vault.decrypt(&rec.password_blob).map_err(|e| e.to_string())?;
     let mut cb = arboard::Clipboard::new().map_err(|e| format!("无法访问剪贴板：{e}"))?;
     cb.set_text(pwd).map_err(|e| format!("复制失败：{e}"))?;
-    println!("密码已复制到剪贴板");
+    println!("{}", ui::theme::ok("✓ 密码已复制到剪贴板"));
     Ok(())
 }
 
 /// 新增记录：按顺序引导输入 8 个字段
 fn add_wizard(vault: &Vault) -> Result<(), String> {
-    println!("\n--- 新增记录（直接回车可跳过非必填项）---");
+    println!("\n{}", ui::theme::title("── 新增记录 ──"));
+    println!("{}", ui::theme::dim("（直接回车可跳过非必填项）"));
     let app_name = loop {
         let v: String = Input::new()
             .with_prompt("应用名称（必填）")
@@ -378,7 +390,7 @@ fn add_wizard(vault: &Vault) -> Result<(), String> {
             .map_err(|_| "已取消".to_string())?;
         let v = v.trim().to_string();
         if v.is_empty() {
-            println!("应用名称不能为空");
+            println!("{}", ui::theme::warn("⚠ 应用名称不能为空"));
             continue;
         }
         break v;
@@ -391,7 +403,7 @@ fn add_wizard(vault: &Vault) -> Result<(), String> {
         password: loop {
             let p = ui::secret_prompt("密码（必填）：")?;
             if p.is_empty() {
-                println!("密码不能为空");
+                println!("{}", ui::theme::warn("⚠ 密码不能为空"));
                 continue;
             }
             break p;
@@ -402,7 +414,10 @@ fn add_wizard(vault: &Vault) -> Result<(), String> {
     };
     // 新增直接保存（无需确认，回车即完成）
     vault.add(&r)?;
-    println!("已添加「{}」，回车可继续其他操作", r.app_name);
+    println!(
+        "{} 回车可继续其他操作",
+        ui::theme::ok(&format!("✓ 已添加「{}」", r.app_name))
+    );
     Ok(())
 }
 
@@ -419,10 +434,10 @@ fn ask(label: &str) -> String {
 fn change_wizard(vault: &Vault) -> Result<(), String> {
     let records = vault.list()?;
     if records.is_empty() {
-        println!("没有记录可修改");
+        println!("{}", ui::theme::dim("没有记录可修改"));
         return Ok(());
     }
-    let idx = select_record(&records, "选择要修改的记录")?;
+    let idx = select_record(&records, ui::theme::title("选择要修改的记录").as_str())?;
     change_one(vault, records[idx].id, idx + 1)
 }
 
@@ -453,11 +468,14 @@ fn change_one(vault: &Vault, id: i64, position: usize) -> Result<(), String> {
 
     loop {
         clear_screen()?; // 切页：每次重绘字段列表都吞没旧输出
-        println!("\n--- 修改记录 #{position}（选择字段编号，可连续修改）---");
+        println!(
+            "\n{}",
+            ui::theme::title(&format!("── 修改记录 #{position} ──"))
+        );
         for (i, name) in FIELD_NAMES.iter().enumerate() {
-            println!("[{i}] {name}：{}", fields[i]);
+            println!("{} {}：{}", ui::theme::dim(&format!("[{i}]")), ui::theme::field(name), fields[i]);
         }
-        println!("[X] 保存并退出 / [Q] 取消");
+        println!("{}", ui::theme::dim("[X] 保存并退出 / [Q] 取消"));
         let choice: String = Input::new()
             .with_prompt("输入 0-7 或 X/Q")
             .allow_empty(true)
@@ -467,14 +485,14 @@ fn change_one(vault: &Vault, id: i64, position: usize) -> Result<(), String> {
         match choice.as_str() {
             "x" | "" => {
                 if !pwd_ok && fields[4].is_empty() {
-                    println!("注意：原密码无法解密，保存后密码将变为空");
+                    println!("{}", ui::theme::warn("⚠ 注意：原密码无法解密，保存后密码将变为空"));
                     if !Confirm::new()
                         .with_prompt("仍要保存吗？")
                         .default(false)
                         .interact_on(&ui::term())
                         .map_err(|_| "已取消".to_string())?
                     {
-                        println!("已取消");
+                        println!("{}", ui::theme::dim("已取消"));
                         return Ok(());
                     }
                 }
@@ -489,20 +507,20 @@ fn change_one(vault: &Vault, id: i64, position: usize) -> Result<(), String> {
                     remark: fields[7].clone(),
                 };
                 vault.save(id, &r)?;
-                println!("已保存，最后修改时间已更新");
+                println!("{}", ui::theme::ok("✓ 已保存，最后修改时间已更新"));
                 return Ok(());
             }
             "q" => {
-                println!("已取消修改");
+                println!("{}", ui::theme::dim("已取消修改"));
                 return Ok(());
             }
             _ => {
                 let Ok(i) = choice.parse::<usize>() else {
-                    println!("无法识别的输入，请输入 0-7 或 X/Q");
+                    println!("{}", ui::theme::err("✗ 无法识别的输入，请输入 0-7 或 X/Q"));
                     continue;
                 };
                 if i >= 8 {
-                    println!("字段编号超出范围，请输入 0-7");
+                    println!("{}", ui::theme::warn("⚠ 字段编号超出范围，请输入 0-7"));
                     continue;
                 }
                 if i == 4 {
@@ -526,10 +544,10 @@ fn change_one(vault: &Vault, id: i64, position: usize) -> Result<(), String> {
 fn delete_wizard(vault: &Vault) -> Result<(), String> {
     let records = vault.list()?;
     if records.is_empty() {
-        println!("没有记录可删除");
+        println!("{}", ui::theme::dim("没有记录可删除"));
         return Ok(());
     }
-    let idx = select_record(&records, "选择要删除的记录")?;
+    let idx = select_record(&records, ui::theme::title("选择要删除的记录").as_str())?;
     confirm_delete(vault, &records[idx], idx + 1)?;
     Ok(())
 }
@@ -558,10 +576,10 @@ fn confirm_delete(vault: &Vault, rec: &Record, position: usize) -> Result<bool, 
         .map_err(|_| "已取消".to_string())?;
     if confirm {
         vault.delete(rec.id)?;
-        println!("已删除");
+        println!("{}", ui::theme::ok("✓ 已删除"));
         Ok(true)
     } else {
-        println!("已取消");
+        println!("{}", ui::theme::dim("已取消"));
         Ok(false)
     }
 }
