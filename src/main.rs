@@ -38,6 +38,7 @@ fn run() -> Result<(), String> {
 const MAIN_PROMPT: &str = "↑↓选择 / [回车]打开 / 输入搜索词 / [A]新增 / [C]修改 / [D]删除 / [Q]退出";
 
 /// 主循环：高亮选择式列表（↑/↓ 移动高亮、回车打开、输入过滤、A/C/D/Q 命令）
+/// 进入详情/向导子界面前后清屏，实现「切新页面」效果（旧输出文字被吞没）。
 fn main_loop(vault: &Vault) -> Result<(), String> {
     // 终端按键读取器（非终端环境为 None，退化为普通读行）
     let reader = ui::KeyReader::new().ok();
@@ -81,7 +82,9 @@ fn main_loop(vault: &Vault) -> Result<(), String> {
             if records.is_empty() {
                 println!("（没有记录可打开）");
             } else {
+                clear_screen()?; // 切页：清掉旧列表
                 open_record(vault, &records[sel], sel + 1)?;
+                clear_screen()?; // 返回：清掉详情页，回到干净列表
             }
             last_rows = 0;
             buf.clear();
@@ -89,17 +92,23 @@ fn main_loop(vault: &Vault) -> Result<(), String> {
         }
         match input.to_ascii_lowercase().as_str() {
             "a" | "w" => {
+                clear_screen()?;
                 add_wizard(vault)?;
+                clear_screen()?;
                 filter = None;
                 sel = 0;
                 last_rows = 0;
             }
             "c" => {
+                clear_screen()?;
                 change_wizard(vault)?;
+                clear_screen()?;
                 last_rows = 0;
             }
             "d" => {
+                clear_screen()?;
                 delete_wizard(vault)?;
+                clear_screen()?;
                 filter = None;
                 last_rows = 0;
             }
@@ -109,7 +118,9 @@ fn main_loop(vault: &Vault) -> Result<(), String> {
                     // 数字：直接打开对应编号记录（并同步高亮）
                     if n >= 1 && n <= records.len() {
                         sel = n - 1;
+                        clear_screen()?;
                         open_record(vault, &records[n - 1], n)?;
+                        clear_screen()?;
                         last_rows = 0;
                         buf.clear();
                     } else {
@@ -126,6 +137,16 @@ fn main_loop(vault: &Vault) -> Result<(), String> {
         }
     }
     println!("再见！");
+    Ok(())
+}
+
+/// 清屏（切页用）：清空整个屏幕并把光标移到左上角，实现「吞没旧输出文字」。
+/// 走缓冲终端，flush 一次性生效。
+fn clear_screen() -> Result<(), String> {
+    let term = ui::term();
+    term.clear_screen()
+        .map_err(|e| format!("清屏失败：{e}"))?;
+    term.flush().map_err(|e| format!("清屏失败：{e}"))?;
     Ok(())
 }
 
