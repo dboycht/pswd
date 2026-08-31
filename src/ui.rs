@@ -349,49 +349,68 @@ fn qa_add(recovery: &mut RecoveryOpts, question: String) -> Result<(), String> {
     Ok(())
 }
 
-/// 启动横幅（Claude Code 风格）：标题 + 作者 + 版本 + 仓库。
-/// 版本号从 Cargo.toml 动态读取（CARGO_PKG_VERSION），避免硬编码。
-/// 内宽固定 40 个半角字符宽（中文按 2 宽计），内容自动居中/左对齐对齐边框。
+/// 启动横幅：大号 ASCII Art 标题（PSWD）+ 作者/版本/仓库信息。
+/// 启动时先清屏，保证终端干净；版本号从 Cargo.toml 动态读取。
 pub fn show_banner() {
     let version = env!("CARGO_PKG_VERSION");
-    let inner = 40usize;
+    // 启动清屏：吞没上次会话的终端残留输出
+    let _ = clear_screen();
 
-    // 显示宽度：先剥离 ANSI 颜色码，再按中文全角=2 其余=1 计数
-    let disp_w = |s: &str| -> usize {
-        console::strip_ansi_codes(s)
+    // 大号 ASCII Art：PSWD（每字母 7 宽 × 6 高，# 块状字符）
+    const ART_P: [&str; 6] = [
+        "#######", "#     #", "#######", "#      ", "#      ", "#      ",
+    ];
+    const ART_S: [&str; 6] = [
+        " ######", "#      ", "###### ", "      #", "#      ", " ######",
+    ];
+    const ART_W: [&str; 6] = [
+        "#     #", "#     #", "#  #  #", "# # # #", "##   ##", "#     #",
+    ];
+    const ART_D: [&str; 6] = [
+        "###### ", "#    # ", "#     #", "#     #", "#    # ", "###### ",
+    ];
+
+    // 按行拼接（字母间 1 空格），保证四字母垂直对齐
+    let art: Vec<String> = (0..6)
+        .map(|i| format!("{} {} {} {}", ART_P[i], ART_S[i], ART_W[i], ART_D[i]))
+        .collect();
+    let art_width = art[0].len();
+
+    // 终端列宽（居中显示）；stdout 非终端时回退 80
+    let cols = console::Term::stdout()
+        .size_checked()
+        .map(|(_, c)| c as usize)
+        .unwrap_or(80);
+    let pad = cols.saturating_sub(art_width) / 2;
+
+    // 大标题（亮洋红加粗）
+    println!();
+    for line in &art {
+        println!("{}{}", " ".repeat(pad), theme::title(line));
+    }
+    println!();
+
+    // 信息行（居中，作者/版本/仓库）
+    fn center(s: &str, cols: usize) -> String {
+        let w = console::strip_ansi_codes(s)
             .chars()
             .map(|c| if ('\u{4e00}'..='\u{9fff}').contains(&c) { 2 } else { 1 })
-            .sum()
-    };
-    // 内容行（居中）：`│..text..│`，text 可为已着色字符串（宽度按剥色后计）
-    let row_center = |t: String| {
-        let w = disp_w(&t);
-        let pad = inner.saturating_sub(w);
-        format!("│{}{t}{}│", " ".repeat(pad / 2), " ".repeat(pad - pad / 2))
-    };
-    // 内容行（左对齐）：`│  text...│`，边框亮洋红、内容保留原色（自动剥色对齐）
-    let row_left = |t: String| {
-        let w = disp_w(&t);
-        let pad = inner.saturating_sub(2 + w);
-        // 手动拼接，避免 format! 嵌套（clippy::format_in_format_args）
-        let mut s = String::with_capacity(inner + 2);
-        s.push_str(&theme::title("│"));
-        s.push_str("  ");
-        s.push_str(&t);
-        s.push_str(&" ".repeat(pad));
-        s.push_str(&theme::title("│"));
-        s
-    };
+            .sum::<usize>();
+        let p = cols.saturating_sub(w) / 2;
+        format!("{}{}", " ".repeat(p), s)
+    }
+    println!("{}", center(&format!("{} {}", theme::field("作者"), theme::dim("D BOY")), cols));
+    println!("{}", center(&format!("{} {}", theme::field("版本"), theme::dim(&format!("v{version}"))), cols));
+    println!("{}", center(&format!("{} {}", theme::field("仓库"), theme::dim("github.com/dboycht/pswd")), cols));
+    println!();
+}
 
-    let line = "─".repeat(inner);
-    println!("\n{}", theme::title(&format!("┌{line}┐")));
-    println!("{}", theme::title(&row_center("✦  P S W D  ✦".to_string())));
-    println!("{}", theme::title(&row_center("密码管理器 (Rust)".to_string())));
-    println!("{}", theme::title(&format!("├{line}┤")));
-    println!("{}", row_left(format!("{} {}", theme::field("作者"), theme::dim("D BOY"))));
-    println!("{}", row_left(format!("{} {}", theme::field("版本"), theme::dim(&format!("v{version}")))));
-    println!("{}", row_left(format!("{} {}", theme::field("仓库"), theme::dim("github.com/dboycht/pswd"))));
-    println!("{}", theme::title(&format!("└{line}┘")));
+/// 清屏：清空整个屏幕并把光标移到左上角（缓冲终端一次性输出，避免闪烁）
+pub fn clear_screen() -> Result<(), String> {
+    let term = term();
+    term.clear_screen().map_err(|e| format!("清屏失败：{e}"))?;
+    term.flush().map_err(|e| format!("清屏失败：{e}"))?;
+    Ok(())
 }
 
 /// 解锁流程：主密码优先，失败后进入恢复菜单

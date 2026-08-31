@@ -165,13 +165,9 @@ fn main_loop(vault: &Vault) -> Result<(), String> {
 }
 
 /// 清屏（切页用）：清空整个屏幕并把光标移到左上角，实现「吞没旧输出文字」。
-/// 走缓冲终端，flush 一次性生效。
+/// 委托 ui::clear_screen（walk 缓冲终端，flush 一次性生效）。
 fn clear_screen() -> Result<(), String> {
-    let term = ui::term();
-    term.clear_screen()
-        .map_err(|e| format!("清屏失败：{e}"))?;
-    term.flush().map_err(|e| format!("清屏失败：{e}"))?;
-    Ok(())
+    ui::clear_screen()
 }
 
 /// 设置菜单：切换主页显示模式（分页 / 一口气全部输出）
