@@ -321,7 +321,7 @@ fn read_command(
         ui::theme::dim(MAIN_PROMPT)
     );
     loop {
-        let _ = write!(out, "\r\x1b[2K{prompt_line} {buf}");
+        ui::redraw_line(&mut out, &format!("{prompt_line} {buf}"));
         let _ = out.flush();
         match reader.read()? {
             KeyPress::Char(c) => {

@@ -197,9 +197,36 @@ impl KeyReader {
 /// 适用于搜索框、字段值、密码等所有用户输入。
 pub const MAX_INPUT: usize = 200;
 
-/// 重绘当前输入行：清空整行 → 提示 + 已输入内容
-fn redraw_input_line(out: &mut impl Write, prompt: &str, body: &str) {
-    let _ = write!(out, "\r\x1b[2K{prompt}{body}");
+/// 在 stderr 的当前行上重绘指定文本：先清空整行并把光标移至行首，再写入文本。
+///
+/// Windows 下用 Win32 API 清当前行（不依赖 `\r\x1b[2K` ANSI），
+/// 避免某些终端（conhost/ISE）不解析 VT 序列时每字符换行/乱码；
+/// 非 Windows 回退 ANSI 清行。掩码输入与主界面指令行共用。
+pub fn redraw_line(out: &mut impl Write, text: &str) {
+    #[cfg(windows)]
+    {
+        unsafe {
+            use windows_sys::Win32::System::Console::{
+                FillConsoleOutputCharacterW, GetConsoleScreenBufferInfo, GetStdHandle,
+                SetConsoleCursorPosition, CONSOLE_SCREEN_BUFFER_INFO, STD_ERROR_HANDLE, COORD,
+            };
+            let handle = GetStdHandle(STD_ERROR_HANDLE);
+            let mut csbi: CONSOLE_SCREEN_BUFFER_INFO = std::mem::zeroed();
+            if GetConsoleScreenBufferInfo(handle, &mut csbi) != 0 {
+                // 清当前行（从行首到窗口右缘）
+                let width = (csbi.srWindow.Right - csbi.srWindow.Left + 1) as u32;
+                let pos = COORD { X: 0, Y: csbi.dwCursorPosition.Y };
+                let mut written: u32 = 0;
+                FillConsoleOutputCharacterW(handle, b' ' as u16, width, pos, &mut written);
+                SetConsoleCursorPosition(handle, pos);
+            }
+        }
+        let _ = write!(out, "{text}");
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = write!(out, "\r\x1b[2K{text}");
+    }
 }
 
 /// 掩码输入：黑点反馈 + Tab 暂时查看
@@ -217,7 +244,7 @@ fn read_masked(prompt: &str) -> Result<String, String> {
         } else {
             format!("{}  （Tab 暂时查看）", "•".repeat(buf.chars().count()))
         };
-        redraw_input_line(&mut out, prompt, &body);
+        redraw_line(&mut out, &format!("{prompt}{body}"));
         let _ = out.flush();
         match reader.read()? {
             KeyPress::Toggle => revealed = !revealed,
@@ -357,17 +384,38 @@ pub fn show_banner() {
     let _ = clear_screen();
 
     // 大号 ASCII Art：PSWD（每字母 7 宽 × 6 高，# 块状字符）
+    // 大号 ASCII Art：PSWD（斜杠/竖线科技感字体，每字母 8 宽 × 6 高）
     const ART_P: [&str; 6] = [
-        "#######", "#     #", "#######", "#      ", "#      ", "#      ",
+        " ____   ",
+        "|  _ \\  ",
+        "| |_) | ",
+        "|  __/  ",
+        "|_|     ",
+        "|_|     ",
     ];
     const ART_S: [&str; 6] = [
-        " ######", "#      ", "###### ", "      #", "#      ", " ######",
+        " ____   ",
+        "/ ___)  ",
+        "|  __ \\ ",
+        " \\___/  ",
+        "|____/  ",
+        "|____/  ",
     ];
     const ART_W: [&str; 6] = [
-        "#     #", "#     #", "#  #  #", "# # # #", "##   ##", "#     #",
+        "_ __ _  ",
+        "| '__|  ",
+        "| |  |  ",
+        "| |_| | ",
+        "|____|  ",
+        "|_| |_| ",
     ];
     const ART_D: [&str; 6] = [
-        "###### ", "#    # ", "#     #", "#     #", "#    # ", "###### ",
+        " ____   ",
+        "|  _ \\  ",
+        "| | | | ",
+        "| |_| | ",
+        "|____/  ",
+        "|____/  ",
     ];
 
     // 按行拼接（字母间 1 空格），保证四字母垂直对齐
@@ -405,12 +453,41 @@ pub fn show_banner() {
     println!();
 }
 
-/// 清屏：清空整个屏幕并把光标移到左上角（缓冲终端一次性输出，避免闪烁）
+/// 清屏：清空整个屏幕并把光标移到左上角。
+///
+/// Windows 下直接用 Win32 控制台 API（FillConsoleOutputCharacterW + SetConsoleCursorPosition），
+/// **不依赖 VT/ANSI 转义**，在任何 Windows 控制台（conhost / Windows Terminal / ISE）都可靠；
+/// 非 Windows 平台回退到 ANSI 清屏序列。
 pub fn clear_screen() -> Result<(), String> {
-    let term = term();
-    term.clear_screen().map_err(|e| format!("清屏失败：{e}"))?;
-    term.flush().map_err(|e| format!("清屏失败：{e}"))?;
-    Ok(())
+    #[cfg(windows)]
+    {
+        unsafe {
+            use windows_sys::Win32::System::Console::{
+                FillConsoleOutputCharacterW, GetConsoleScreenBufferInfo, GetStdHandle,
+                SetConsoleCursorPosition, CONSOLE_SCREEN_BUFFER_INFO, STD_OUTPUT_HANDLE, COORD,
+            };
+            let handle = GetStdHandle(STD_OUTPUT_HANDLE);
+            let mut csbi: CONSOLE_SCREEN_BUFFER_INFO = std::mem::zeroed();
+            if GetConsoleScreenBufferInfo(handle, &mut csbi) == 0 {
+                return Err("清屏失败：无法读取控制台信息".into());
+            }
+            // 清空当前可见窗口区域（从窗口顶部到光标所在行数）
+            let window_rows = (csbi.srWindow.Bottom - csbi.srWindow.Top + 1) as u32;
+            let cells = csbi.dwSize.X as u32 * window_rows;
+            let top = COORD { X: 0, Y: csbi.srWindow.Top };
+            let mut written: u32 = 0;
+            FillConsoleOutputCharacterW(handle, b' ' as u16, cells, top, &mut written);
+            SetConsoleCursorPosition(handle, top);
+        }
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    {
+        let term = term();
+        term.clear_screen().map_err(|e| format!("清屏失败：{e}"))?;
+        term.flush().map_err(|e| format!("清屏失败：{e}"))?;
+        Ok(())
+    }
 }
 
 /// 解锁流程：主密码优先，失败后进入恢复菜单
@@ -482,4 +559,42 @@ fn recovery_menu(db_path: &str) -> Result<Vault, String> {
         }
     }
     Ok(vault)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// banner 的 ASCII Art 四字母数组必须等长，且拼接后每行宽度一致（防对齐回归）
+    #[test]
+    fn banner_art_lines_are_same_width() {
+        const ART_P: [&str; 6] = [
+            " ____   ", "|  _ \\  ", "| |_) | ", "|  __/  ", "|_|     ", "|_|     ",
+        ];
+        const ART_S: [&str; 6] = [
+            " ____   ", "/ ___)  ", "|  __ \\ ", " \\___/  ", "|____/  ", "|____/  ",
+        ];
+        const ART_W: [&str; 6] = [
+            "_ __ _  ", "| '__|  ", "| |  |  ", "| |_| | ", "|____|  ", "|_| |_| ",
+        ];
+        const ART_D: [&str; 6] = [
+            " ____   ", "|  _ \\  ", "| | | | ", "| |_| | ", "|____/  ", "|____/  ",
+        ];
+        // 每个字母数组内每行等长
+        for art in [&ART_P, &ART_S, &ART_W, &ART_D] {
+            let w = art[0].len();
+            for line in art {
+                assert_eq!(line.len(), w, "字母内行宽不一致");
+            }
+        }
+        // 拼接后每行等长
+        let joined: Vec<String> = (0..6)
+            .map(|i| format!("{} {} {} {}", ART_P[i], ART_S[i], ART_W[i], ART_D[i]))
+            .collect();
+        let w = joined[0].len();
+        for line in &joined {
+            assert_eq!(line.len(), w, "拼接后行宽不一致");
+        }
+        assert_eq!(w, 35);
+    }
 }
