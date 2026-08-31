@@ -37,7 +37,7 @@ fn run() -> Result<(), String> {
 }
 
 /// 主界面指令行的提示文字
-const MAIN_PROMPT: &str = "↑↓选择 / [回车]打开 / 输入搜索词 / [A]新增 / [C]修改 / [D]删除 / [Q]退出";
+const MAIN_PROMPT: &str = "↑↓选择 / [回车]打开 / 输入搜索词 / [A]新增 / [C]修改 / [D]删除 / [S]设置 / [Q]退出";
 
 /// 主循环：高亮选择式列表（↑/↓ 移动高亮、回车打开、输入过滤、A/C/D/Q 命令）
 /// 进入详情/向导子界面前后清屏，实现「切新页面」效果（旧输出文字被吞没）。
@@ -62,12 +62,18 @@ fn main_loop(vault: &Vault) -> Result<(), String> {
         } else if sel >= records.len() {
             sel = records.len() - 1;
         }
+        // 显示模式：分页（PAGE_SIZE）/ 全部（一口气输出所有名称）
+        let display_mode = vault.display_mode();
+        let page_size = match display_mode {
+            storage::DisplayMode::Paged => PAGE_SIZE,
+            storage::DisplayMode::Full => records.len().max(1),
+        };
 
         // 渲染列表（终端环境用缓冲重绘，非终端退化为普通打印）
         if reader.is_some() {
-            render_select_list(&records, sel, &filter, &mut last_rows)?;
+            render_select_list(&records, sel, &filter, page_size, &mut last_rows)?;
         } else {
-            render_plain_list(&records, &filter)?;
+            render_plain_list(&records, &filter, page_size)?;
         }
 
         // 指令输入：↑/↓ 移动高亮（返回 None 表示重新渲染列表）
@@ -102,16 +108,32 @@ fn main_loop(vault: &Vault) -> Result<(), String> {
                 last_rows = 0;
             }
             "c" => {
-                clear_screen()?;
-                change_wizard(vault)?;
-                clear_screen()?;
+                if records.is_empty() {
+                    println!("{}", ui::theme::dim("没有记录可修改"));
+                } else {
+                    clear_screen()?;
+                    change_one(vault, records[sel].id, sel + 1)?;
+                    clear_screen()?;
+                }
                 last_rows = 0;
             }
             "d" => {
+                if records.is_empty() {
+                    println!("{}", ui::theme::dim("没有记录可删除"));
+                } else {
+                    clear_screen()?;
+                    confirm_delete(vault, &records[sel], sel + 1)?;
+                    clear_screen()?;
+                    filter = None;
+                    sel = 0;
+                }
+                last_rows = 0;
+            }
+            "s" => {
                 clear_screen()?;
-                delete_wizard(vault)?;
+                settings_menu(vault)?;
                 clear_screen()?;
-                filter = None;
+                sel = 0;
                 last_rows = 0;
             }
             "q" | "exit" | "quit" => break,
@@ -152,6 +174,35 @@ fn clear_screen() -> Result<(), String> {
     Ok(())
 }
 
+/// 设置菜单：切换主页显示模式（分页 / 一口气全部输出）
+fn settings_menu(vault: &Vault) -> Result<(), String> {
+    println!("\n{}", ui::theme::title("── 设置 ──"));
+    let current = vault.display_mode();
+    let items = vec![
+        format!("分页显示（推荐，每页 {} 条）{}", PAGE_SIZE, if current == storage::DisplayMode::Paged { "  ✓ 当前" } else { "" }),
+        format!("一口气全部输出（不换页，记录多时列表很长）{}", if current == storage::DisplayMode::Full { "  ✓ 当前" } else { "" }),
+        format!("退出设置"),
+    ];
+    let choice = Select::new()
+        .with_prompt("主页显示方式")
+        .items(&items)
+        .default(if current == storage::DisplayMode::Paged { 0 } else { 1 })
+        .interact_on(&ui::term())
+        .map_err(|_| "已取消".to_string())?;
+    match choice {
+        0 => {
+            vault.set_display_mode(storage::DisplayMode::Paged)?;
+            println!("{}", ui::theme::ok("✓ 已切换为分页显示"));
+        }
+        1 => {
+            vault.set_display_mode(storage::DisplayMode::Full)?;
+            println!("{}", ui::theme::ok("✓ 已切换为全部输出"));
+        }
+        _ => println!("{}", ui::theme::dim("已退出设置")),
+    }
+    Ok(())
+}
+
 /// 高亮选择式列表渲染：整块清空 → 标题 + 列表（高亮行反色）→ 分隔线，
 /// 全部写入缓冲终端，flush 一次性输出，避免逐行刷新闪烁。
 /// 提示行（MAIN_PROMPT）由 read_command 单独维护，不在此渲染（避免双行提示）。
@@ -159,13 +210,17 @@ fn render_select_list(
     records: &[Record],
     sel: usize,
     filter: &Option<String>,
+    page_size: usize,
     last_rows: &mut usize,
 ) -> Result<(), String> {
     let term = ui::term();
-    let pages = records.len().div_ceil(PAGE_SIZE).max(1);
-    let page = if records.is_empty() { 0 } else { sel / PAGE_SIZE };
-    let start = page * PAGE_SIZE;
-    let end = (start + PAGE_SIZE).min(records.len());
+    // Full 模式（一口气全部输出）：page_size 等于记录数 → 单页全量渲染，
+    // 重绘时用清屏绝对定位，避免大列表滚动后 clear_last_lines 相对定位错位。
+    let full_mode = !records.is_empty() && page_size >= records.len();
+    let pages = records.len().div_ceil(page_size).max(1);
+    let page = if records.is_empty() { 0 } else { sel / page_size };
+    let start = page * page_size;
+    let end = (start + page_size).min(records.len());
 
     // 标题（含总数/搜索词/页码）——Claude 风格：亮洋红标题 + 暗色页码
     let mut title = format!(" 密码库（共 {} 条", records.len());
@@ -182,8 +237,11 @@ fn render_select_list(
     let item_lines = if records.is_empty() { 1 } else { end - start };
     let rows = 1 + item_lines + 1; // 标题 + 记录/提示 + 分隔线（提示行在渲染区下一行，由 read_command 维护）
 
-    // 上次渲染过则先清掉旧区域再重绘（缓冲序列，flush 时一次性生效）
-    if *last_rows > 0 {
+    if full_mode {
+        // Full 模式：清屏后从头渲染（绝对定位，可靠）
+        term.clear_screen().map_err(|e| format!("重绘失败：{e}"))?;
+    } else if *last_rows > 0 {
+        // 分页模式：清掉旧区域再重绘（缓冲序列，flush 时一次性生效）
         term.clear_last_lines(*last_rows)
             .map_err(|e| format!("重绘失败：{e}"))?;
     }
@@ -216,11 +274,12 @@ fn render_select_list(
 fn render_plain_list(
     records: &[Record],
     filter: &Option<String>,
+    page_size: usize,
 ) -> Result<(), String> {
-    let pages = records.len().div_ceil(PAGE_SIZE).max(1);
+    let pages = records.len().div_ceil(page_size).max(1);
     let page = 0;
-    let start = page * PAGE_SIZE;
-    let end = (start + PAGE_SIZE).min(records.len());
+    let start = page * page_size;
+    let end = (start + page_size).min(records.len());
 
     let mut title = format!("========== 密码库（共 {} 条", records.len());
     if let Some(kw) = filter {
@@ -432,17 +491,6 @@ fn ask(label: &str) -> String {
     v.trim().to_string()
 }
 
-/// 修改记录：列表选择目标后进入字段编辑
-fn change_wizard(vault: &Vault) -> Result<(), String> {
-    let records = vault.list()?;
-    if records.is_empty() {
-        println!("{}", ui::theme::dim("没有记录可修改"));
-        return Ok(());
-    }
-    let idx = select_record(&records, ui::theme::title("选择要修改的记录").as_str())?;
-    change_one(vault, records[idx].id, idx + 1)
-}
-
 /// 字段编辑：循环修改多个字段，X 保存 / Q 取消
 fn change_one(vault: &Vault, id: i64, position: usize) -> Result<(), String> {
     let Some(rec) = vault.get(id)? else {
@@ -542,31 +590,7 @@ fn change_one(vault: &Vault, id: i64, position: usize) -> Result<(), String> {
     }
 }
 
-/// 删除记录：列表选择目标并二次确认
-fn delete_wizard(vault: &Vault) -> Result<(), String> {
-    let records = vault.list()?;
-    if records.is_empty() {
-        println!("{}", ui::theme::dim("没有记录可删除"));
-        return Ok(());
-    }
-    let idx = select_record(&records, ui::theme::title("选择要删除的记录").as_str())?;
-    confirm_delete(vault, &records[idx], idx + 1)?;
-    Ok(())
-}
-
-fn select_record(records: &[Record], prompt: &str) -> Result<usize, String> {
-    let items: Vec<String> = records
-        .iter()
-        .enumerate()
-        .map(|(i, r)| format!("[{}] {}", i + 1, r.app_name))
-        .collect();
-    Select::new()
-        .with_prompt(prompt)
-        .items(&items)
-        .interact_on(&ui::term())
-        .map_err(|_| "已取消".to_string())
-}
-
+/// 确认删除并执行（作用于调用方传入的记录）
 fn confirm_delete(vault: &Vault, rec: &Record, position: usize) -> Result<bool, String> {
     let confirm = Confirm::new()
         .with_prompt(format!(

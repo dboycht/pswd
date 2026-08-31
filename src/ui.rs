@@ -240,6 +240,7 @@ fn read_line_fallback() -> Result<String, String> {
 /// 首次使用向导：设置主密码 + 可选恢复路径，然后建库。
 /// 返回主密码（供调用方直接解锁，避免重复输入）。
 pub fn setup_wizard(db_path: &str) -> Result<String, String> {
+    show_banner();
     println!("\n{}", theme::title("── 首次使用 · 创建密码库 ──"));
     println!("{}", theme::dim(&format!("数据库：{db_path}")));
     println!("{}", theme::dim("- 主密码用于加密全部数据，不会保存为明文"));
@@ -339,9 +340,53 @@ fn qa_add(recovery: &mut RecoveryOpts, question: String) -> Result<(), String> {
     Ok(())
 }
 
+/// 启动横幅（Claude Code 风格）：标题 + 作者 + 版本 + 仓库。
+/// 版本号从 Cargo.toml 动态读取（CARGO_PKG_VERSION），避免硬编码。
+/// 内宽固定 40 个半角字符宽（中文按 2 宽计），内容自动居中/左对齐对齐边框。
+pub fn show_banner() {
+    let version = env!("CARGO_PKG_VERSION");
+    let inner = 40usize;
+
+    // 显示宽度：先剥离 ANSI 颜色码，再按中文全角=2 其余=1 计数
+    let disp_w = |s: &str| -> usize {
+        console::strip_ansi_codes(s)
+            .chars()
+            .map(|c| if ('\u{4e00}'..='\u{9fff}').contains(&c) { 2 } else { 1 })
+            .sum()
+    };
+    // 内容行（居中）：`│..text..│`，text 可为已着色字符串（宽度按剥色后计）
+    let row_center = |t: String| {
+        let w = disp_w(&t);
+        let pad = inner.saturating_sub(w);
+        format!("│{}{t}{}│", " ".repeat(pad / 2), " ".repeat(pad - pad / 2))
+    };
+    // 内容行（左对齐）：`│  text...│`，边框亮洋红、内容保留原色（自动剥色对齐）
+    let row_left = |t: String| {
+        let w = disp_w(&t);
+        let pad = inner.saturating_sub(2 + w);
+        format!(
+            "{}{}{}",
+            theme::title("│"),
+            format!("  {t}{}", " ".repeat(pad)),
+            theme::title("│")
+        )
+    };
+
+    let line = "─".repeat(inner);
+    println!("\n{}", theme::title(&format!("┌{line}┐")));
+    println!("{}", theme::title(&row_center("✦  P S W D  ✦".to_string())));
+    println!("{}", theme::title(&row_center("密码管理器 (Rust)".to_string())));
+    println!("{}", theme::title(&format!("├{line}┤")));
+    println!("{}", row_left(format!("{} {}", theme::field("作者"), theme::dim("D BOY"))));
+    println!("{}", row_left(format!("{} {}", theme::field("版本"), theme::dim(&format!("v{version}")))));
+    println!("{}", row_left(format!("{} {}", theme::field("仓库"), theme::dim("github.com/dboycht/pswd"))));
+    println!("{}", theme::title(&format!("└{line}┘")));
+}
+
 /// 解锁流程：主密码优先，失败后进入恢复菜单
 pub fn unlock_flow(db_path: &str) -> Result<Vault, String> {
-    let pw = secret_prompt("主密码：")?;
+    show_banner();
+    let pw = secret_prompt("\n主密码：")?;
     match storage::open(db_path, &pw) {
         Ok(vault) => {
             println!("{}", theme::ok("✓ 解锁成功"));

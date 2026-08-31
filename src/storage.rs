@@ -14,6 +14,32 @@ const META_MASTER_SALT: &str = "master_salt";
 const META_MASTER_WRAPPED: &str = "master_wrapped";
 const META_MACHINE_SALT: &str = "machine_salt";
 const META_MACHINE_WRAPPED: &str = "machine_wrapped";
+const META_DISPLAY_MODE: &str = "display_mode";
+
+/// 主页显示模式：分页（默认）/ 一口气全部输出
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DisplayMode {
+    /// 分页：每页 PAGE_SIZE 条
+    Paged,
+    /// 全部：一口气输出所有记录名称
+    Full,
+}
+
+impl DisplayMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            DisplayMode::Paged => "paged",
+            DisplayMode::Full => "full",
+        }
+    }
+
+    pub fn from_key(s: &str) -> DisplayMode {
+        match s {
+            "full" => DisplayMode::Full,
+            _ => DisplayMode::Paged,
+        }
+    }
+}
 
 /// 恢复路径设置（初始化时传入）
 pub struct RecoveryOpts {
@@ -375,6 +401,18 @@ impl Vault {
         set_meta(&self.conn, META_MASTER_WRAPPED, &wrapped)?;
         Ok(())
     }
+
+    /// 当前主页显示模式（默认分页，未设置时返回 Paged）
+    pub fn display_mode(&self) -> DisplayMode {
+        get_meta(&self.conn, META_DISPLAY_MODE)
+            .map(|s| DisplayMode::from_key(&s))
+            .unwrap_or(DisplayMode::Paged)
+    }
+
+    /// 设置主页显示模式
+    pub fn set_display_mode(&self, mode: DisplayMode) -> Result<(), String> {
+        set_meta(&self.conn, META_DISPLAY_MODE, mode.as_str())
+    }
 }
 
 fn row_to_record(row: &rusqlite::Row) -> rusqlite::Result<Record> {
@@ -523,6 +561,43 @@ mod tests {
             .unwrap();
         let rec = v.get(id).unwrap().unwrap();
         assert!(v.decrypt(&rec.password_blob).is_err());
+        let _ = std::fs::remove_file(&db);
+    }
+
+    #[test]
+    fn display_mode_default_and_persist() {
+        let db = temp_db("dmode");
+        init(&db, "m", &RecoveryOpts { machine_binding: false, qa_pairs: vec![] }).unwrap();
+        // 默认分页
+        let v = open(&db, "m").unwrap();
+        assert_eq!(v.display_mode(), DisplayMode::Paged);
+        // 改为全部输出并持久化
+        v.set_display_mode(DisplayMode::Full).unwrap();
+        drop(v);
+        let v = open(&db, "m").unwrap();
+        assert_eq!(v.display_mode(), DisplayMode::Full);
+        // 切回分页
+        v.set_display_mode(DisplayMode::Paged).unwrap();
+        drop(v);
+        let v = open(&db, "m").unwrap();
+        assert_eq!(v.display_mode(), DisplayMode::Paged);
+        let _ = std::fs::remove_file(&db);
+    }
+
+    #[test]
+    fn display_mode_unknown_value_falls_back() {
+        let db = temp_db("dmode2");
+        init(&db, "m", &RecoveryOpts { machine_binding: false, qa_pairs: vec![] }).unwrap();
+        let v = open(&db, "m").unwrap();
+        // 手动写入非法值 → 应回退到 Paged
+        v.conn
+            .execute(
+                "INSERT INTO meta(key, value) VALUES('display_mode', 'bogus')
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                [],
+            )
+            .unwrap();
+        assert_eq!(v.display_mode(), DisplayMode::Paged);
         let _ = std::fs::remove_file(&db);
     }
 }
