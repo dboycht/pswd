@@ -215,8 +215,9 @@ pub fn redraw_line(out: &mut impl Write, text: &str) {
     {
         unsafe {
             use windows_sys::Win32::System::Console::{
-                FillConsoleOutputCharacterW, GetConsoleScreenBufferInfo, GetStdHandle,
-                SetConsoleCursorPosition, CONSOLE_SCREEN_BUFFER_INFO, STD_ERROR_HANDLE, COORD,
+                FillConsoleOutputAttribute, FillConsoleOutputCharacterW, GetConsoleScreenBufferInfo,
+                GetStdHandle, SetConsoleCursorPosition, CONSOLE_SCREEN_BUFFER_INFO, STD_ERROR_HANDLE,
+                COORD,
             };
             let handle = GetStdHandle(STD_ERROR_HANDLE);
             let mut csbi: CONSOLE_SCREEN_BUFFER_INFO = std::mem::zeroed();
@@ -225,7 +226,10 @@ pub fn redraw_line(out: &mut impl Write, text: &str) {
                 let width = (csbi.srWindow.Right - csbi.srWindow.Left + 1) as u32;
                 let pos = COORD { X: 0, Y: csbi.dwCursorPosition.Y };
                 let mut written: u32 = 0;
+                let mut wrote_attr: u32 = 0;
                 FillConsoleOutputCharacterW(handle, b' ' as u16, width, pos, &mut written);
+                // 必须同时恢复颜色属性：否则空格会继承高亮行的反色（白色）背景，残留白色块
+                FillConsoleOutputAttribute(handle, csbi.wAttributes, width, pos, &mut wrote_attr);
                 SetConsoleCursorPosition(handle, pos);
             }
         }
@@ -470,8 +474,9 @@ pub fn clear_screen() -> Result<(), String> {
     {
         unsafe {
             use windows_sys::Win32::System::Console::{
-                FillConsoleOutputCharacterW, GetConsoleScreenBufferInfo, GetStdHandle,
-                SetConsoleCursorPosition, CONSOLE_SCREEN_BUFFER_INFO, STD_OUTPUT_HANDLE, COORD,
+                FillConsoleOutputAttribute, FillConsoleOutputCharacterW, GetConsoleScreenBufferInfo,
+                GetStdHandle, SetConsoleCursorPosition, CONSOLE_SCREEN_BUFFER_INFO, STD_OUTPUT_HANDLE,
+                COORD,
             };
             let handle = GetStdHandle(STD_OUTPUT_HANDLE);
             let mut csbi: CONSOLE_SCREEN_BUFFER_INFO = std::mem::zeroed();
@@ -483,7 +488,10 @@ pub fn clear_screen() -> Result<(), String> {
             let cells = csbi.dwSize.X as u32 * window_rows;
             let top = COORD { X: 0, Y: csbi.srWindow.Top };
             let mut written: u32 = 0;
+            let mut wrote_attr: u32 = 0;
             FillConsoleOutputCharacterW(handle, b' ' as u16, cells, top, &mut written);
+            // 必须同时恢复颜色属性：否则空格会继承高亮行的反色（白色）背景，残留白色块
+            FillConsoleOutputAttribute(handle, csbi.wAttributes, cells, top, &mut wrote_attr);
             SetConsoleCursorPosition(handle, top);
         }
         Ok(())
