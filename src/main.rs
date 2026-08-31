@@ -328,7 +328,12 @@ fn read_command(
         let _ = write!(out, "\r\x1b[2K{prompt_line} {buf}");
         let _ = out.flush();
         match reader.read()? {
-            KeyPress::Char(c) => buf.push(c),
+            KeyPress::Char(c) => {
+                // 长度防护：超过上限的字符忽略
+                if buf.chars().count() < ui::MAX_INPUT {
+                    buf.push(c);
+                }
+            }
             KeyPress::Backspace => {
                 buf.pop();
             }
@@ -364,13 +369,13 @@ fn read_command(
     }
 }
 
-/// 非终端环境：普通读行（无直接翻页，其余行为一致）
+/// 非终端环境：普通读行（无直接翻页，其余行为一致；结果截断到 MAX_INPUT）
 fn read_line_fallback() -> Result<String, String> {
     let mut line = String::new();
     std::io::stdin()
         .read_line(&mut line)
         .map_err(|e| format!("无法读取输入：{e}"))?;
-    Ok(line.trim().to_string())
+    Ok(line.trim().chars().take(ui::MAX_INPUT).collect())
 }
 
 /// 查看记录：完整字段 + 解密密码（默认掩码显示，V 暂时查看），可复制/修改/删除
@@ -449,7 +454,8 @@ fn add_wizard(vault: &Vault) -> Result<(), String> {
             .with_prompt("应用名称（必填）")
             .interact_text_on(&ui::term())
             .map_err(|_| "已取消".to_string())?;
-        let v = v.trim().to_string();
+        // 长度防护：超长值截断到 MAX_INPUT
+        let v: String = v.trim().chars().take(ui::MAX_INPUT).collect();
         if v.is_empty() {
             println!("{}", ui::theme::warn("⚠ 应用名称不能为空"));
             continue;
@@ -488,7 +494,8 @@ fn ask(label: &str) -> String {
         .allow_empty(true)
         .interact_text_on(&ui::term())
         .unwrap_or_default();
-    v.trim().to_string()
+    // 长度防护：超长值截断到 MAX_INPUT
+    v.trim().chars().take(ui::MAX_INPUT).collect()
 }
 
 /// 字段编辑：循环修改多个字段，X 保存 / Q 取消
@@ -583,7 +590,8 @@ fn change_one(vault: &Vault, id: i64, position: usize) -> Result<(), String> {
                         .allow_empty(true)
                         .interact_text_on(&ui::term())
                         .map_err(|_| "已取消".to_string())?;
-                    fields[i] = v.trim().to_string();
+                    // 长度防护：超长值截断到 MAX_INPUT
+                    fields[i] = v.trim().chars().take(ui::MAX_INPUT).collect();
                 }
             }
         }

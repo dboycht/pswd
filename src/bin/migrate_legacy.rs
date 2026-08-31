@@ -109,5 +109,6 @@ fn ask_path(prompt: &str, default: &str) -> Result<PathBuf, String> {
         .default(default.to_string())
         .interact_text_on(&ui::term())
         .map_err(|_| "已取消".to_string())?;
-    Ok(PathBuf::from(v.trim()))
+    // 长度防护：超长路径截断到 MAX_INPUT，避免意外输入导致系统调用异常
+    Ok(PathBuf::from(v.trim().chars().take(pswd::ui::MAX_INPUT).collect::<String>()))
 }

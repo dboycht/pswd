@@ -193,6 +193,10 @@ impl KeyReader {
     }
 }
 
+/// 输入长度上限（字符数）：防止意外超长输入导致界面渲染错乱/资源消耗。
+/// 适用于搜索框、字段值、密码等所有用户输入。
+pub const MAX_INPUT: usize = 200;
+
 /// 重绘当前输入行：清空整行 → 提示 + 已输入内容
 fn redraw_input_line(out: &mut impl Write, prompt: &str, body: &str) {
     let _ = write!(out, "\r\x1b[2K{prompt}{body}");
@@ -217,7 +221,12 @@ fn read_masked(prompt: &str) -> Result<String, String> {
         let _ = out.flush();
         match reader.read()? {
             KeyPress::Toggle => revealed = !revealed,
-            KeyPress::Char(c) => buf.push(c),
+            KeyPress::Char(c) => {
+                // 长度防护：超过上限的字符忽略（防止超长输入撑坏界面）
+                if buf.chars().count() < MAX_INPUT {
+                    buf.push(c);
+                }
+            }
             KeyPress::Backspace => {
                 buf.pop();
             }
@@ -228,13 +237,13 @@ fn read_masked(prompt: &str) -> Result<String, String> {
     }
 }
 
-/// 非终端（管道/重定向）时的降级方案：普通读行
+/// 非终端（管道/重定向）时的降级方案：普通读行（结果截断到 MAX_INPUT）
 fn read_line_fallback() -> Result<String, String> {
     let mut line = String::new();
     std::io::stdin()
         .read_line(&mut line)
         .map_err(|e| format!("无法读取输入：{e}"))?;
-    Ok(line.trim_end_matches(['\r', '\n']).to_string())
+    Ok(line.trim_end_matches(['\r', '\n']).chars().take(MAX_INPUT).collect())
 }
 
 /// 首次使用向导：设置主密码 + 可选恢复路径，然后建库。
@@ -364,12 +373,14 @@ pub fn show_banner() {
     let row_left = |t: String| {
         let w = disp_w(&t);
         let pad = inner.saturating_sub(2 + w);
-        format!(
-            "{}{}{}",
-            theme::title("│"),
-            format!("  {t}{}", " ".repeat(pad)),
-            theme::title("│")
-        )
+        // 手动拼接，避免 format! 嵌套（clippy::format_in_format_args）
+        let mut s = String::with_capacity(inner + 2);
+        s.push_str(&theme::title("│"));
+        s.push_str("  ");
+        s.push_str(&t);
+        s.push_str(&" ".repeat(pad));
+        s.push_str(&theme::title("│"));
+        s
     };
 
     let line = "─".repeat(inner);
