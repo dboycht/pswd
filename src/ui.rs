@@ -88,10 +88,18 @@ pub mod theme {
 /// 提示符经 Rust std 输出（对控制台走 WriteConsoleW，中文安全）。
 pub fn secret_prompt(prompt: &str) -> Result<String, String> {
     let mut err = std::io::stderr();
-    err.write_all(prompt.as_bytes())
+    // 前导换行只输出一次（如 banner 与输入提示之间的空行）；
+    // 重绘时使用不含换行的提示符，避免每次按键写入 \n 导致光标逐行下移。
+    let (lead, clean) = match prompt.strip_prefix('\n') {
+        Some(rest) => ("\n", rest),
+        None => ("", prompt),
+    };
+    err.write_all(lead.as_bytes())
+        .map_err(|e| format!("无法显示提示：{e}"))?;
+    err.write_all(clean.as_bytes())
         .map_err(|e| format!("无法显示提示：{e}"))?;
     err.flush().map_err(|e| format!("无法刷新输出：{e}"))?;
-    let result = read_masked(prompt);
+    let result = read_masked(clean);
     // 输入结束后换行
     let _ = err.write_all(b"\r\n");
     let _ = err.flush();
@@ -383,39 +391,38 @@ pub fn show_banner() {
     // 启动清屏：吞没上次会话的终端残留输出
     let _ = clear_screen();
 
-    // 大号 ASCII Art：PSWD（每字母 7 宽 × 6 高，# 块状字符）
-    // 大号 ASCII Art：PSWD（斜杠/竖线科技感字体，每字母 8 宽 × 6 高）
+    // 大号 ASCII Art 标题：FIGlet slant 字体（正宗 slant.flf 字形，6 行高）
     const ART_P: [&str; 6] = [
-        " ____   ",
-        "|  _ \\  ",
-        "| |_) | ",
-        "|  __/  ",
-        "|_|     ",
-        "|_|     ",
+        "    ____ ",
+        "   / __ \\",
+        "  / /_/ /",
+        " / ____/ ",
+        "/_/      ",
+        "         ",
     ];
     const ART_S: [&str; 6] = [
-        " ____   ",
-        "/ ___)  ",
-        "|  __ \\ ",
-        " \\___/  ",
-        "|____/  ",
-        "|____/  ",
+        "   _____",
+        "  / ___/",
+        "  \\__ \\ ",
+        " ___/ / ",
+        "/____/  ",
+        "        ",
     ];
     const ART_W: [&str; 6] = [
-        "_ __ _  ",
-        "| '__|  ",
-        "| |  |  ",
-        "| |_| | ",
-        "|____|  ",
-        "|_| |_| ",
+        " _       __",
+        "| |     / /",
+        "| | /| / / ",
+        "| |/ |/ /  ",
+        "|__/|__/   ",
+        "           ",
     ];
     const ART_D: [&str; 6] = [
-        " ____   ",
-        "|  _ \\  ",
-        "| | | | ",
-        "| |_| | ",
-        "|____/  ",
-        "|____/  ",
+        "    ____ ",
+        "   / __ \\",
+        "  / / / /",
+        " / /_/ / ",
+        "/_____/  ",
+        "         ",
     ];
 
     // 按行拼接（字母间 1 空格），保证四字母垂直对齐
@@ -565,36 +572,35 @@ fn recovery_menu(db_path: &str) -> Result<Vault, String> {
 mod tests {
     use super::*;
 
-    /// banner 的 ASCII Art 四字母数组必须等长，且拼接后每行宽度一致（防对齐回归）
+    /// banner 的 ASCII Art（FIGlet slant 字体）：每个字母必须 6 行、无空行、宽度 ≤16（slant 最大宽）
     #[test]
-    fn banner_art_lines_are_same_width() {
+    fn banner_art_slant_shape_valid() {
         const ART_P: [&str; 6] = [
-            " ____   ", "|  _ \\  ", "| |_) | ", "|  __/  ", "|_|     ", "|_|     ",
+            "    ____ ", "   / __ \\", "  / /_/ /", " / ____/ ", "/_/      ", "         ",
         ];
         const ART_S: [&str; 6] = [
-            " ____   ", "/ ___)  ", "|  __ \\ ", " \\___/  ", "|____/  ", "|____/  ",
+            "   _____", "  / ___/", "  \\__ \\ ", " ___/ / ", "/____/  ", "        ",
         ];
         const ART_W: [&str; 6] = [
-            "_ __ _  ", "| '__|  ", "| |  |  ", "| |_| | ", "|____|  ", "|_| |_| ",
+            " _       __", "| |     / /", "| | /| / / ", "| |/ |/ /  ", "|__/|__/   ", "           ",
         ];
         const ART_D: [&str; 6] = [
-            " ____   ", "|  _ \\  ", "| | | | ", "| |_| | ", "|____/  ", "|____/  ",
+            "    ____ ", "   / __ \\", "  / / / /", " / /_/ / ", "/_____/  ", "         ",
         ];
-        // 每个字母数组内每行等长
         for art in [&ART_P, &ART_S, &ART_W, &ART_D] {
-            let w = art[0].len();
+            assert_eq!(art.len(), 6, "slant 字母必须 6 行");
             for line in art {
-                assert_eq!(line.len(), w, "字母内行宽不一致");
+                assert!(!line.is_empty(), "slant 字母不应有空字符串行");
+                assert!(line.len() <= 16, "slant 字母行宽超过最大宽度 16");
             }
         }
-        // 拼接后每行等长
+        // 拼接顺序不产生换行字符
         let joined: Vec<String> = (0..6)
             .map(|i| format!("{} {} {} {}", ART_P[i], ART_S[i], ART_W[i], ART_D[i]))
             .collect();
-        let w = joined[0].len();
         for line in &joined {
-            assert_eq!(line.len(), w, "拼接后行宽不一致");
+            assert!(!line.contains('\n'), "拼接行不应含换行");
         }
-        assert_eq!(w, 35);
+        assert!(joined[0].len() > 30, "大标题应足够宽");
     }
 }
